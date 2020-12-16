@@ -32,8 +32,8 @@ sampling_stages  = 500   # number of times to resample new time-space domain poi
 steps_per_sample = 10    # number of SGD steps to take before re-sampling
 
 # Sampling parameters
-nSim_interior = 1000
-nSim_terminal = 100
+nSim_interior = 100
+nSim_terminal = 10
 
 # Plot options
 n_plot = 41  # Points on plot grid for each dimension
@@ -121,7 +121,17 @@ def loss(model, t_interior, X_interior, t_terminal, X_terminal):
     L3 = tf.reduce_mean( tf.square(fitted_terminal - target_terminal) )
 
     return L1, L3
-    
+
+def gprime(X): # MC x NC x D
+    return np.log(0.5 + 0.5*np.sum(X**2, axis=2, keepdims=True)) # MC x N x 1
+
+def u_exact(t, X): # NC x 1, NC x D
+    MC = 10**3
+    NC = t.shape[0]
+    D = 100
+    W = np.random.normal(size=(MC,NC,D)) # MC x NC x D
+    return -np.log(np.mean(np.exp(-gprime(X + np.sqrt(2.0*np.abs(1.0-t))*W)),axis=0))
+
 
 #%% Set up network
 
@@ -151,6 +161,9 @@ global_step = tf.Variable(0, trainable=False)
 learning_rate = tf.compat.v1.train.exponential_decay(starting_learning_rate, global_step, 100000, 0.96, staircase=True)
 optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=learning_rate).minimize(loss_tnsr)
 
+import time
+start = time.time()
+
 # initialize variables
 init_op = tf.compat.v1.global_variables_initializer()
 
@@ -161,6 +174,12 @@ sess.run(init_op)
 #%% Train network
 # initialize loss per training
 loss_list = []
+t_interior, X_interior, t_terminal, X_terminal = sampler(nSim_interior, nSim_terminal);
+
+t_concat = np.concatenate((t_interior, t_terminal), axis = 0)
+X_concat = np.concatenate((X_interior, X_terminal), axis = 0)
+
+truvalues = u_exact(t_concat, X_concat);
 
 # for each sampling stage
 for i in range(sampling_stages):
@@ -175,6 +194,20 @@ for i in range(sampling_stages):
         loss_list.append(loss)
     
     print(loss, L1, L3, i)
+
+t_interior, X_interior, t_terminal, X_terminal = sampler(nSim_interior, nSim_terminal);
+
+t_concat = np.concatenate((t_interior, t_terminal), axis = 0)
+X_concat = np.concatenate((X_interior, X_terminal), axis = 0)
+
+truvalues = u_exact(t_concat, X_concat);
+end = time.time()
+print(end - start)
+predictions = sess.run([V], feed_dict = {t_interior_tnsr:t_interior, X_interior_tnsr:X_interior, t_terminal_tnsr:t_terminal, X_terminal_tnsr:X_terminal})
+
+
+errs = np.sqrt((truvalues - predictions)**2/truvalues**2)
+print(np.mean(errs))
 
 # save outout
 if saveOutput:
